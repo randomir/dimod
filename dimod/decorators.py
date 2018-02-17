@@ -1,7 +1,13 @@
 """todo
 
 """
-import inspect
+try:
+    # python2
+    import funcsigs as inspect
+except:
+    # python3
+    import inspect
+
 from functools import wraps
 
 from dimod.compatibility23 import iteritems
@@ -113,13 +119,16 @@ def vartype_argument(*arg_names):
         arg_names = ['vartype']
 
     def _vartype_arg(f):
-        argspec = inspect.getargspec(f)
+        fsig = inspect.signature(f)
 
-        def _enforce_single_arg(name, args, kwargs):
+        def _enforce_single_arg(name, arguments, user_kwargs):
             try:
-                vartype = kwargs[name]
+                vartype = arguments[name]
             except KeyError:
-                raise TypeError('vartype argument missing')
+                try:
+                    vartype = user_kwargs[name]
+                except:
+                    raise TypeError('vartype argument missing')
 
             if isinstance(vartype, Vartype):
                 return
@@ -135,25 +144,30 @@ def vartype_argument(*arg_names):
                                  "Vartype.SPIN, 'SPIN', {-1, 1}, "
                                  "Vartype.BINARY, 'BINARY', or {0, 1}."))
 
-            kwargs[name] = vartype
+            if name in arguments:
+                arguments[name] = vartype
+            else:
+                user_kwargs[name] = vartype
 
         @wraps(f)
         def new_f(*args, **kwargs):
-            # bound actual f arguments (including defaults) to f argument names
+            # bind actual f arguments (including defaults) to f argument names
             # (note: if call arguments don't match actual function signature,
             # we'll fail here with the standard `TypeError`)
-            bound_args = inspect.getcallargs(f, *args, **kwargs)
+            bound_args = fsig.bind(*args, **kwargs)
+            bound_args.apply_defaults()
 
-            # `getcallargs` doesn't merge additional positional/keyword arguments,
-            # so do it manually
-            final_args = list(bound_args.pop(argspec.varargs, ()))
-            final_kwargs = bound_args.pop(argspec.keywords, {})
-
-            final_kwargs.update(bound_args)
+            user_kwargs_name = [name for name, desc in bound_args.signature.parameters.items() if desc.kind == inspect.Parameter.VAR_KEYWORD]
+            if user_kwargs_name:
+                user_kwargs_name = user_kwargs_name[0]
+                user_kwargs = bound_args.arguments[user_kwargs_name]
+            else:
+                user_kwargs = {}
+            
             for name in arg_names:
-                _enforce_single_arg(name, final_args, final_kwargs)
+                _enforce_single_arg(name, bound_args.arguments, user_kwargs)
 
-            return f(*final_args, **final_kwargs)
+            return f(*bound_args.args, **bound_args.kwargs)
 
         return new_f
 
